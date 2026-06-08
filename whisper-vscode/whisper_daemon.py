@@ -26,7 +26,7 @@ CHUNK_MINUTES   = 20
 RECORDINGS_DIR  = Path.home() / "recordings"
 SOCKET_PATH     = "/tmp/whisper_daemon.sock"
 LANGUAGE_LABELS = {"sv": "Swedish", "en": "English"}
-PREFERRED_INPUT_DEVICES = ["Logitech Webcam C925e", "MacBook Pro"]
+PREFERRED_INPUT_DEVICES = ["MacBook Pro"]
 TRANSCRIPT_FILE = "/tmp/whisper_latest_transcript.txt"
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -32,7 +32,7 @@ is pasted wherever your cursor is.
 - The result is pasted via macOS NSPasteboard + System Events
 
 **Default shortcuts:** `Ctrl+Shift+E` (English) · `Ctrl+Shift+S` (Swedish)
-These are configurable — see Step 4 of setup.
+To change them, edit `keybindings.json` after install (see Troubleshooting).
 
 ---
 
@@ -163,44 +163,28 @@ The installer will:
 - Copy scripts to `~/.productivity-tools/whisper-vscode/`
 - Generate a LaunchAgent plist with the correct Python path and install it
 - Start the daemon immediately
-- Print exact instructions for the remaining manual steps
+- Write the VS Code tasks and keybindings automatically
+- Print the remaining manual step(s)
 
 ---
 
-## Manual steps after install.sh
+## Manual step after install.sh
 
-The installer will print these with your exact paths filled in, but here is
-what to expect:
-
-### Step A — VS Code tasks
-
-Open (create if missing): `~/Library/Application Support/Code/User/tasks.json`
-
-Add the two Whisper tasks into the `"tasks"` array. The installer prints the
-exact JSON with your install path already substituted.
-
-### Step B — VS Code keybindings
-
-Open (create if missing): `~/Library/Application Support/Code/User/keybindings.json`
-
-Add the two keybinding entries into the top-level array. The installer prints them.
-
-Note: `ctrl+shift+s` and `ctrl+shift+e` are the defaults. If either conflicts
-with another shortcut, choose different keys and update both the keybindings and
-the task `"args"` to match.
-
-### Step C — macOS Accessibility permission
+### Step A — macOS Accessibility permission
 
 The paste step requires Accessibility access for the Python binary.
 
 Open: **System Settings → Privacy & Security → Accessibility**
 Click `+` and add the Python binary path (the installer prints the exact path).
 
+On first use, macOS may show an automatic permission dialog — clicking Allow
+there is equivalent.
+
 ---
 
 ## Verification
 
-After completing all steps:
+After completing the manual step:
 
 ```bash
 # 1. Confirm daemon is running
@@ -253,9 +237,9 @@ sleep 3 && cat /tmp/whisper_daemon.log | tail -5
 
 ### Shortcut does nothing in VS Code
 
-- Confirm `tasks.json` is saved and valid JSON
 - In VS Code: `Cmd+Shift+P` → `Tasks: Run Task` → you should see "Whisper EN" and "Whisper SV"
-- If tasks appear there but shortcut doesn't work: check `keybindings.json` for conflicts
+- If tasks are missing: re-run `install.sh`
+- If tasks appear but shortcut doesn't work: check `keybindings.json` for conflicts
 
 ### Text pastes with wrong characters (broken Å Ä Ö etc.)
 
@@ -272,12 +256,20 @@ The daemon is pre-warmed so recording starts instantly; the delay is the Whisper
 
 ### Recording from wrong microphone
 
-The daemon prefers `Logitech Webcam C925e` then `MacBook Pro` built-in.
+The daemon uses the system default microphone, with a preference for the built-in
+MacBook Pro mic if multiple inputs are available.
 To see available devices:
 ```bash
 python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]"
 ```
-To change preference, edit `PREFERRED_INPUT_DEVICES` at the top of `~/.productivity-tools/whisper-vscode/whisper_daemon.py` and reload the daemon.
+To change preference, edit `PREFERRED_INPUT_DEVICES` at the top of
+`~/.productivity-tools/whisper-vscode/whisper_daemon.py` and reload the daemon.
+
+### Changing the keyboard shortcuts
+
+Edit `~/Library/Application Support/Code/User/keybindings.json` — find the two
+Whisper entries and change the `"key"` values. If you also rename the task labels,
+update the matching `"args"` values in `tasks.json`.
 
 ---
 
@@ -288,6 +280,8 @@ To change preference, edit `PREFERRED_INPUT_DEVICES` at the top of `~/.productiv
 | `~/.productivity-tools/whisper-vscode/whisper_daemon.py` | Background daemon |
 | `~/.productivity-tools/whisper-vscode/whisper_trigger.sh` | Shortcut trigger |
 | `~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist` | Auto-start at login |
+| `~/Library/Application Support/Code/User/tasks.json` | VS Code task definitions |
+| `~/Library/Application Support/Code/User/keybindings.json` | VS Code keyboard shortcuts |
 | `~/recordings/` | WAV recordings saved here (created on first use) |
 | `/tmp/whisper_daemon.log` | Daemon log |
 | `/tmp/whisper_daemon.err` | Daemon error log |
@@ -300,4 +294,4 @@ launchctl unload ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.pl
 rm ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
 rm -rf ~/.productivity-tools/whisper-vscode
 ```
-Then remove the tasks and keybinding entries from VS Code config.
+Then remove the Whisper entries from `tasks.json` and `keybindings.json` in VS Code config.

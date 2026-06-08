@@ -87,20 +87,103 @@ else
   info "Daemon may still be starting. Check: cat /tmp/whisper_daemon.log"
 fi
 
-# ── 9. Manual steps ───────────────────────────────────────────────────────────
+# ── 9. VS Code tasks.json ─────────────────────────────────────────────────────
+TASKS_FILE="$HOME/Library/Application Support/Code/User/tasks.json"
+TRIGGER_PATH="$INSTALL_DIR/whisper_trigger.sh"
+info "Updating VS Code tasks.json..."
+"$PYTHON_PATH" - "$TASKS_FILE" "$TRIGGER_PATH" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+tasks_file = Path(sys.argv[1])
+trigger = sys.argv[2]
+
+new_tasks = [
+    {
+        "label": "Whisper EN",
+        "type": "shell",
+        "command": f"{trigger} en",
+        "presentation": {"reveal": "always", "panel": "shared", "showReuseMessage": False}
+    },
+    {
+        "label": "Whisper SV",
+        "type": "shell",
+        "command": f"{trigger} sv",
+        "presentation": {"reveal": "always", "panel": "shared", "showReuseMessage": False}
+    }
+]
+
+try:
+    content = json.loads(tasks_file.read_text())
+    tasks = [t for t in content.get("tasks", []) if not t.get("label", "").startswith("Whisper")]
+    tasks.extend(new_tasks)
+    content["tasks"] = tasks
+except (FileNotFoundError, json.JSONDecodeError):
+    content = {"version": "2.0.0", "tasks": new_tasks}
+
+tasks_file.parent.mkdir(parents=True, exist_ok=True)
+tasks_file.write_text(json.dumps(content, indent=4) + "\n")
+PYEOF
+ok "VS Code tasks.json updated"
+
+# ── 10. VS Code keybindings.json ──────────────────────────────────────────────
+KB_FILE="$HOME/Library/Application Support/Code/User/keybindings.json"
+info "Updating VS Code keybindings.json..."
+"$PYTHON_PATH" - "$KB_FILE" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+kb_file = Path(sys.argv[1])
+
+entries_block = (
+    '    // ── Whisper ───────────────────────────────────────────────────────────────\n'
+    '    // Ctrl+Shift+E: record + transcribe (English)\n'
+    '    {\n'
+    '        "key": "ctrl+shift+e",\n'
+    '        "command": "workbench.action.tasks.runTask",\n'
+    '        "args": "Whisper EN"\n'
+    '    },\n'
+    '    // Ctrl+Shift+S: record + transcribe (Swedish)\n'
+    '    {\n'
+    '        "key": "ctrl+shift+s",\n'
+    '        "command": "workbench.action.tasks.runTask",\n'
+    '        "args": "Whisper SV"\n'
+    '    }'
+)
+
+try:
+    content = kb_file.read_text()
+    if '"Whisper EN"' in content:
+        sys.exit(0)  # Already present — nothing to do
+    last_bracket = content.rfind(']')
+    before = content[:last_bracket].rstrip()
+    if before and before[-1] not in (',', '['):
+        before += ','
+    kb_file.write_text(before + '\n\n' + entries_block + '\n]\n')
+except FileNotFoundError:
+    new_entries = [
+        {"key": "ctrl+shift+e", "command": "workbench.action.tasks.runTask", "args": "Whisper EN"},
+        {"key": "ctrl+shift+s", "command": "workbench.action.tasks.runTask", "args": "Whisper SV"}
+    ]
+    kb_file.parent.mkdir(parents=True, exist_ok=True)
+    kb_file.write_text(json.dumps(new_entries, indent=4) + "\n")
+PYEOF
+ok "VS Code keybindings.json updated"
+
+# ── Manual steps ──────────────────────────────────────────────────────────────
 echo ""
 hr
-echo -e "${BOLD}  AUTOMATED SETUP COMPLETE — MANUAL STEPS BELOW${NC}"
+echo -e "${BOLD}  AUTOMATED SETUP COMPLETE — MANUAL STEP(S) BELOW${NC}"
 hr
-echo ""
-echo "The following cannot be automated. Work through each step in order."
-echo "Run the verification command at the end of each step before continuing."
 echo ""
 
-# Step 1 — API key
-echo -e "${BOLD}STEP 1 — OpenAI API key${NC}"
-hr
-cat <<EOF
+STEP=1
+
+# API key — only shown if not already set
+if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+  echo -e "${BOLD}STEP $STEP — OpenAI API key${NC}"
+  hr
+  cat <<EOF
 Add to ~/.zshrc:
   export OPENAI_API_KEY="sk-your-key-here"
 
@@ -116,100 +199,30 @@ Verification:
   cat /tmp/whisper_daemon.log | tail -3
 Expected output contains: "Ready. Input device:" and "Listening on /tmp/whisper_daemon.sock"
 EOF
-echo ""
+  echo ""
+  STEP=$((STEP + 1))
+else
+  ok "OpenAI API key already set — skipping Step 1"
+  echo ""
+fi
 
-# Step 2 — Accessibility
-echo -e "${BOLD}STEP 2 — macOS Accessibility permission${NC}"
+# Accessibility
+echo -e "${BOLD}STEP $STEP — macOS Accessibility permission${NC}"
 hr
 cat <<EOF
 Open: System Settings → Privacy & Security → Accessibility
 Click + and add this exact path:
   $PYTHON_PATH
 
-This allows the tool to paste transcribed text into any app via simulated Cmd+V.
-
-Verification (run after granting):
-  osascript -e 'tell application "System Events" to keystroke ""'
-Expected: no output, exit code 0. If you see an error, the permission was not granted.
+This allows the daemon to paste transcribed text wherever your cursor is.
+On first use, macOS may show an automatic permission dialog — clicking Allow
+there is equivalent. If you already clicked Allow, this step is done.
 EOF
 echo ""
+STEP=$((STEP + 1))
 
-# Step 3 — VS Code tasks
-TRIGGER_PATH="$INSTALL_DIR/whisper_trigger.sh"
-echo -e "${BOLD}STEP 3 — VS Code tasks${NC}"
-hr
-cat <<EOF
-File: ~/Library/Application Support/Code/User/tasks.json
-
-If the file does not exist, create it with exactly this content.
-If it exists, merge the two task objects into the existing "tasks" array.
-
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Whisper EN",
-      "type": "shell",
-      "command": "$TRIGGER_PATH en",
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "showReuseMessage": false
-      }
-    },
-    {
-      "label": "Whisper SV",
-      "type": "shell",
-      "command": "$TRIGGER_PATH sv",
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "showReuseMessage": false
-      }
-    }
-  ]
-}
-
-Verification (in VS Code):
-  Cmd+Shift+P → "Tasks: Run Task"
-Expected: "Whisper EN" and "Whisper SV" appear in the list
-EOF
-echo ""
-
-# Step 4 — Keybindings
-echo -e "${BOLD}STEP 4 — VS Code keybindings${NC}"
-hr
-cat <<EOF
-File: ~/Library/Application Support/Code/User/keybindings.json
-
-If the file does not exist, create it with exactly this content.
-If it exists, add these two objects into the existing top-level array.
-
-[
-  {
-    "key": "ctrl+shift+e",
-    "command": "workbench.action.tasks.runTask",
-    "args": "Whisper EN"
-  },
-  {
-    "key": "ctrl+shift+s",
-    "command": "workbench.action.tasks.runTask",
-    "args": "Whisper SV"
-  }
-]
-
-Note: ctrl+shift+e and ctrl+shift+s are the defaults. Change them here if they
-conflict with existing shortcuts. If you change them, update the "args" values
-in tasks.json to match the "label" fields (which you can also rename there).
-
-Verification (in VS Code):
-  Cmd+Shift+P → "Open Keyboard Shortcuts (JSON)"
-  Confirm the two entries are present and saved.
-EOF
-echo ""
-
-# Step 5 — End-to-end test
-echo -e "${BOLD}STEP 5 — End-to-end verification${NC}"
+# End-to-end test
+echo -e "${BOLD}STEP $STEP — End-to-end verification${NC}"
 hr
 cat <<EOF
 1. Open VS Code
@@ -225,13 +238,13 @@ cat <<EOF
    And the text is pasted where your cursor was.
 
 If recording starts but text does not paste automatically:
-  → Cmd+V manually — if text appears, Step 2 (Accessibility) was not completed
-  → Re-do Step 2, then test again
+  → Re-check System Settings → Privacy & Security → Accessibility
+  → The Python binary must have a checkmark: $PYTHON_PATH
+  → Cmd+V manually — if text appears, Accessibility permission is missing
 
-If the shortcut does nothing:
-  → Confirm tasks.json is valid JSON (no trailing commas, correct brackets)
-  → Confirm the task appears in: Cmd+Shift+P → Tasks: Run Task
-  → Confirm keybindings.json is valid JSON
+If the shortcut does nothing in VS Code:
+  → Cmd+Shift+P → "Tasks: Run Task" — confirm "Whisper EN" appears
+  → If tasks are missing, re-run install.sh
 
 Full log for debugging:
   cat /tmp/whisper_daemon.log
@@ -239,5 +252,5 @@ Full log for debugging:
 EOF
 echo ""
 hr
-echo -e "${GREEN}${BOLD}Done.${NC} Complete the 5 steps above to finish setup."
+echo -e "${GREEN}${BOLD}Done.${NC} Complete the step(s) above to finish setup."
 echo ""
