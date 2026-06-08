@@ -160,10 +160,22 @@ class WhisperDaemon:
                 if not self.stop_event.is_set():
                     self.frames.append(indata.copy())
 
-            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
-                                dtype="float32", device=self.device,
-                                callback=callback):
-                self.stop_event.wait()
+            for try_dev in ([self.device, None] if self.device is not None else [None]):
+                try:
+                    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1,
+                                        dtype="float32", device=try_dev,
+                                        callback=callback):
+                        if try_dev != self.device:
+                            fb = sd.query_devices(sd.default.device[0])["name"].split("(")[0].strip()
+                            log(f"Preferred device unavailable — using {fb}")
+                            notify("Whisper", f"Using fallback mic: {fb}")
+                        self.stop_event.wait()
+                    break
+                except sd.PortAudioError:
+                    if try_dev is None:
+                        raise
+                    log("Preferred device unavailable, retrying with system default…")
+                    self.frames = []
 
             if not self.frames:
                 log("No audio captured — recording too short, skipping.")

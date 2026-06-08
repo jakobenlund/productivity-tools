@@ -1,7 +1,28 @@
 # whisper-vscode
 
-Instant voice-to-text inside VS Code. Press a keyboard shortcut to start recording,
-press it again to stop — the transcript is pasted wherever your cursor is.
+Voice-to-text inside VS Code via OpenAI Whisper. Speak — transcript is pasted
+wherever your cursor is.
+
+## Two modes
+
+| | Standalone | Daemon |
+|---|---|---|
+| **How** | `python3 transcribe.py` in a terminal, press Enter to stop | Keyboard shortcut, no terminal needed |
+| **Startup** | 2–3s delay (Python loads each time) | Instant (daemon pre-warmed at login) |
+| **Setup** | Minimal — just Python + API key | Requires LaunchAgent + VS Code config |
+| **File** | `transcribe.py` | `whisper_daemon.py` + `whisper_trigger.sh` |
+
+**Start with standalone mode** if you want the simplest possible setup.
+Switch to daemon mode when the startup delay becomes annoying.
+
+Both modes use the same OpenAI Whisper API and support Swedish and English.
+
+---
+
+## Daemon mode
+
+Press a keyboard shortcut to start recording, press again to stop — transcript
+is pasted wherever your cursor is.
 
 **How it works:**
 - A Python daemon starts at login and keeps the Whisper client loaded in memory
@@ -24,7 +45,35 @@ fix before continuing; do not skip steps.
 
 ---
 
-## Prerequisites
+## Standalone mode (quick start)
+
+Requires only Python 3, ffmpeg, and an OpenAI API key — no daemon, no VS Code config.
+
+```bash
+# Install dependencies
+brew install ffmpeg
+pip3 install openai sounddevice numpy
+
+# Add to ~/.zshrc, then: source ~/.zshrc
+export OPENAI_API_KEY="sk-your-key-here"
+
+# Run
+python3 transcribe.py        # Swedish (default)
+python3 transcribe.py en     # English
+```
+
+The script records until you press Enter, then transcribes and pastes the result.
+macOS will prompt for Accessibility permission on first use — click Allow.
+
+To change the preferred microphone, edit `PREFERRED_INPUT_DEVICES` at the top of
+`transcribe.py`. Run this to see available devices:
+```bash
+python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]"
+```
+
+---
+
+## Daemon mode — Prerequisites
 
 Run these checks first. Fix anything that fails before running `install.sh`.
 
