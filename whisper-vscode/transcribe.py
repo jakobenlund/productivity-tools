@@ -37,7 +37,8 @@ from openai import OpenAI
 SAMPLE_RATE    = 16000
 MP3_BITRATE    = "64k"
 CHUNK_MINUTES  = 20
-RECORDINGS_DIR = Path.home() / "recordings"
+RECORDINGS_DIR = Path(os.environ.get("WHISPER_RECORDINGS_DIR", Path.home() / "recordings"))
+SAVE_RECORDINGS = os.environ.get("WHISPER_SAVE_RECORDINGS", "0") == "1"
 LANGUAGE_LABELS = {"sv": "Swedish 🇸🇪", "en": "English 🇬🇧"}
 DEFAULT_LANGUAGE = "sv"
 
@@ -49,6 +50,10 @@ PREFERRED_INPUT_DEVICES = ["MacBook Pro"]
 # ─────────────────────────────────────────────────────────────────────────────
 
 LANGUAGE = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_LANGUAGE
+if LANGUAGE not in LANGUAGE_LABELS:
+    print(f"❌  Unsupported language: {LANGUAGE}")
+    print("    Use 'sv' or 'en'.")
+    sys.exit(1)
 
 
 def find_input_device() -> int | None:
@@ -168,7 +173,7 @@ def paste_to_focused(text: str):
 
 def main():
     api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    if not api_key or api_key == "sk-your-key-here":
         print("❌  OPENAI_API_KEY not set.")
         print("    Add this to your ~/.zshrc:")
         print('    export OPENAI_API_KEY="sk-..."')
@@ -178,26 +183,40 @@ def main():
         print("❌  ffmpeg not found. Install with: brew install ffmpeg")
         sys.exit(1)
 
-    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    wav_path = RECORDINGS_DIR / f"{timestamp}.wav"
+    if SAVE_RECORDINGS:
+        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+        wav_path = RECORDINGS_DIR / f"{timestamp}.wav"
+    else:
+        runtime_dir = Path.home() / ".productivity-tools" / "whisper-vscode" / "run"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        runtime_dir.chmod(0o700)
+        wav_path = runtime_dir / f"{timestamp}.wav"
 
     audio = record_until_enter()
 
-    print(f"💾  Saving to {wav_path}")
+    if SAVE_RECORDINGS:
+        print(f"💾  Saving to {wav_path}")
     save_wav(audio, wav_path)
 
     try:
         text = transcribe_audio(audio, wav_path)
     except Exception as e:
         print(f"\n❌  Transcription failed: {e}")
-        print(f"    Recording kept at: {wav_path}")
+        if SAVE_RECORDINGS:
+            print(f"    Recording kept at: {wav_path}")
         print(f"    Retry with: python3 {__file__} {LANGUAGE}")
         sys.exit(1)
+    finally:
+        if not SAVE_RECORDINGS:
+            wav_path.unlink(missing_ok=True)
 
     print(f"\n📝  Transcript:\n{text}\n")
     paste_to_focused(text)
-    print(f"✅  Pasted.  (recording at {wav_path})")
+    if SAVE_RECORDINGS:
+        print(f"✅  Pasted.  (recording at {wav_path})")
+    else:
+        print("✅  Pasted.  (temporary audio deleted)")
 
 
 if __name__ == "__main__":

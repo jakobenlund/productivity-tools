@@ -3,6 +3,27 @@
 Voice-to-text inside VS Code via OpenAI Whisper. Speak — transcript is pasted
 wherever your cursor is.
 
+## Privacy, security, and cost
+
+Read this before installing:
+
+- This is a macOS-only personal dictation tool. It is not a local/offline
+  transcription system.
+- Microphone audio is sent to the OpenAI Audio Transcriptions API using your own
+  API key. See OpenAI's API data controls:
+  https://platform.openai.com/docs/guides/your-data
+- API usage may cost money on your OpenAI account. Check current transcription
+  pricing before heavy use: https://platform.openai.com/docs/models/whisper-1
+- Temporary audio files are deleted after transcription by default.
+- If you want to keep WAV recordings for debugging, set
+  `WHISPER_SAVE_RECORDINGS=1`. Those files are saved to `~/recordings/` unless
+  you set `WHISPER_RECORDINGS_DIR`.
+- Transcribed text is put on your clipboard and pasted into whichever app is
+  focused. Make sure your cursor is in the right place before stopping
+  recording.
+- Do not use this for confidential, regulated, or third-party audio unless you
+  understand and accept the privacy, consent, and compliance implications.
+
 ## Two modes
 
 | | Standalone | Daemon |
@@ -27,6 +48,8 @@ is pasted wherever your cursor is.
 **How it works:**
 - A Python daemon starts at login and keeps the Whisper client loaded in memory
 - Pressing the shortcut sends a toggle signal to the daemon via a Unix socket
+- The first shortcut press starts background recording; the VS Code task then
+  exits, but recording continues until you press the shortcut again
 - Recording happens on a dedicated microphone (not your Bluetooth headphones)
 - Transcription uses the OpenAI Whisper API (cloud, not local model)
 - The result is pasted via macOS NSPasteboard + System Events
@@ -64,6 +87,8 @@ python3 transcribe.py en     # English
 
 The script records until you press Enter, then transcribes and pastes the result.
 macOS will prompt for Accessibility permission on first use — click Allow.
+Temporary audio is deleted after transcription unless `WHISPER_SAVE_RECORDINGS=1`
+is set.
 
 To change the preferred microphone, edit `PREFERRED_INPUT_DEVICES` at the top of
 `transcribe.py`. Run this to see available devices:
@@ -138,9 +163,9 @@ Expected: a path like `/Users/USERNAME/.pyenv/versions/3.12.7/bin/python3`
 ### 5. OpenAI API key
 
 ```bash
-echo $OPENAI_API_KEY
+test -n "$OPENAI_API_KEY" && echo "OPENAI_API_KEY is set"
 ```
-Expected: a string starting with `sk-`.
+Expected: `OPENAI_API_KEY is set`.
 If empty: get a key at https://platform.openai.com/api-keys, then add to `~/.zshrc`:
 ```
 export OPENAI_API_KEY="sk-your-key-here"
@@ -188,24 +213,28 @@ After completing the manual step:
 
 ```bash
 # 1. Confirm daemon is running
-cat /tmp/whisper_daemon.log | tail -3
+cat ~/.productivity-tools/whisper-vscode/whisper_daemon.log | tail -3
 ```
-Expected: `[HH:MM:SS] Ready. Input device: ...` and `[HH:MM:SS] Listening on /tmp/whisper_daemon.sock`
+Expected: `[HH:MM:SS] Ready. Input device: ...` and `[HH:MM:SS] Listening on .../run/whisper_daemon.sock`
 
 ```bash
 # 2. Confirm socket exists
-ls -la /tmp/whisper_daemon.sock
+ls -la ~/.productivity-tools/whisper-vscode/run/whisper_daemon.sock
 ```
-Expected: `srwxr-xr-x ... /tmp/whisper_daemon.sock`
+Expected: a Unix socket file owned by your user.
 
 ```bash
-# 3. Trigger test (start then stop immediately)
+# 3. Trigger test (start, wait briefly, then stop)
 ~/.productivity-tools/whisper-vscode/whisper_trigger.sh en
-# wait 1 second, then:
+# say a few words or wait 4 seconds, then:
 ~/.productivity-tools/whisper-vscode/whisper_trigger.sh en
 ```
-Expected first output: `🎙  Recording [en]...`
-Expected second output: `⏳  Transcribing...` followed by `✅  [empty or short transcript]`
+Expected first output: `🎙  Recording [en] in background.`
+Expected second output: `⏳  Transcribing...` followed by `✅  [short transcript]`
+
+If you stop immediately, the second command may print
+`⚠️ Empty transcript — nothing to paste.` That means the toggle path works but
+the recording was too short to send useful audio.
 
 ```bash
 # 4. Confirm full transcript flow in VS Code
@@ -214,6 +243,10 @@ In VS Code: press `Ctrl+Shift+E`, say a sentence, press `Ctrl+Shift+E` again.
 The terminal panel should show `✅  [your sentence]` and the text should appear
 wherever your cursor was.
 
+Note: after the first key press, the terminal task exits and returns to a prompt.
+That is expected; the daemon continues recording in the background until the
+second key press.
+
 ---
 
 ## Troubleshooting
@@ -221,18 +254,18 @@ wherever your cursor was.
 ### Daemon not starting
 
 ```bash
-cat /tmp/whisper_daemon.err
+cat ~/.productivity-tools/whisper-vscode/whisper_daemon.err
 ```
 Common causes:
 - `OPENAI_API_KEY not found` → add key to `~/.zshrc`, reload daemon
 - Python package missing → re-run `install.sh`
-- Port/socket conflict → `rm /tmp/whisper_daemon.sock` and reload daemon
+- Socket conflict → `rm ~/.productivity-tools/whisper-vscode/run/whisper_daemon.sock` and reload daemon
 
 Reload daemon:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
 launchctl load  ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
-sleep 3 && cat /tmp/whisper_daemon.log | tail -5
+sleep 3 && cat ~/.productivity-tools/whisper-vscode/whisper_daemon.log | tail -5
 ```
 
 ### Shortcut does nothing in VS Code
@@ -240,6 +273,18 @@ sleep 3 && cat /tmp/whisper_daemon.log | tail -5
 - In VS Code: `Cmd+Shift+P` → `Tasks: Run Task` → you should see "Whisper EN" and "Whisper SV"
 - If tasks are missing: re-run `install.sh`
 - If tasks appear but shortcut doesn't work: check `keybindings.json` for conflicts
+
+### Recording appears to start, then nothing happens
+
+This usually means you have only pressed the shortcut once. Press it again to
+stop recording and start transcription. The first key press starts background
+recording and the VS Code task exits; that is normal.
+
+If the second press times out, check the daemon log:
+```bash
+cat ~/.productivity-tools/whisper-vscode/whisper_daemon.log
+cat ~/.productivity-tools/whisper-vscode/whisper_daemon.err
+```
 
 ### Text pastes with wrong characters (broken Å Ä Ö etc.)
 
@@ -271,6 +316,17 @@ Edit `~/Library/Application Support/Code/User/keybindings.json` — find the two
 Whisper entries and change the `"key"` values. If you also rename the task labels,
 update the matching `"args"` values in `tasks.json`.
 
+### Keeping or deleting recordings
+
+By default, WAV files are temporary and deleted after transcription. To keep
+recordings for debugging:
+```bash
+export WHISPER_SAVE_RECORDINGS=1
+export WHISPER_RECORDINGS_DIR="$HOME/recordings"
+```
+Then restart the daemon. Delete old recordings manually when you no longer need
+them.
+
 ---
 
 ## Files installed
@@ -279,13 +335,13 @@ update the matching `"args"` values in `tasks.json`.
 |------|---------|
 | `~/.productivity-tools/whisper-vscode/whisper_daemon.py` | Background daemon |
 | `~/.productivity-tools/whisper-vscode/whisper_trigger.sh` | Shortcut trigger |
+| `~/.productivity-tools/whisper-vscode/run/` | User-only runtime directory for socket and temporary transcript handoff |
 | `~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist` | Auto-start at login |
 | `~/Library/Application Support/Code/User/tasks.json` | VS Code task definitions |
 | `~/Library/Application Support/Code/User/keybindings.json` | VS Code keyboard shortcuts |
-| `~/recordings/` | WAV recordings saved here (created on first use) |
-| `/tmp/whisper_daemon.log` | Daemon log |
-| `/tmp/whisper_daemon.err` | Daemon error log |
-| `/tmp/whisper_daemon.sock` | Unix socket |
+| `~/recordings/` | Optional WAV recordings if `WHISPER_SAVE_RECORDINGS=1` |
+| `~/.productivity-tools/whisper-vscode/whisper_daemon.log` | Daemon log |
+| `~/.productivity-tools/whisper-vscode/whisper_daemon.err` | Daemon error log |
 
 ## Uninstall
 
@@ -295,3 +351,7 @@ rm ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
 rm -rf ~/.productivity-tools/whisper-vscode
 ```
 Then remove the Whisper entries from `tasks.json` and `keybindings.json` in VS Code config.
+
+## License
+
+MIT. See the repository-level `LICENSE` file.

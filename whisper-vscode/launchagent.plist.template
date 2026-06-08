@@ -21,8 +21,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/whisper_daemon.log</string>
+    <string>{{INSTALL_DIR}}/whisper_daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/whisper_daemon.err</string>
+    <string>{{INSTALL_DIR}}/whisper_daemon.err</string>
 </dict>
 </plist>

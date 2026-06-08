@@ -4,12 +4,23 @@
 # Phase 2 (recording→done): stops, waits for transcript, pastes it here
 #   (paste runs in VS Code terminal context which has accessibility permission).
 WHISPER_LANG="${1:-sv}"
-SOCKET="/tmp/whisper_daemon.sock"
-TRANSCRIPT_FILE="/tmp/whisper_latest_transcript.txt"
+case "$WHISPER_LANG" in
+    sv|en) ;;
+    *)
+        echo "❌ Unsupported language: $WHISPER_LANG"
+        echo "   Use: sv or en"
+        exit 1
+        ;;
+esac
+
+RUNTIME_DIR="$HOME/.productivity-tools/whisper-vscode/run"
+SOCKET="$RUNTIME_DIR/whisper_daemon.sock"
+TRANSCRIPT_FILE="$RUNTIME_DIR/whisper_latest_transcript.txt"
+ERROR_FILE="$RUNTIME_DIR/whisper_latest_error.txt"
 
 if [ ! -S "$SOCKET" ]; then
     echo "❌ Whisper daemon not running."
-    echo "   Start it: launchctl load ~/Library/LaunchAgents/com.jakob.whisper-daemon.plist"
+    echo "   Start it: launchctl load ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist"
     exit 1
 fi
 
@@ -18,11 +29,21 @@ STATUS=$(echo '{"action":"status"}' | nc -U "$SOCKET" 2>/dev/null)
 if echo "$STATUS" | grep -q '"recording"'; then
     # ── Stop phase ──────────────────────────────────────────────────────────
     rm -f "$TRANSCRIPT_FILE"
-    echo "{\"action\":\"toggle\",\"lang\":\"$WHISPER_LANG\"}" | nc -U "$SOCKET" > /dev/null
+    rm -f "$ERROR_FILE"
+    RESPONSE=$(printf '{"action":"toggle","lang":"%s"}\n' "$WHISPER_LANG" | nc -U "$SOCKET")
+    if ! echo "$RESPONSE" | grep -q '"stop_signaled"'; then
+        echo "❌ Could not stop recording. Daemon response: $RESPONSE"
+        exit 1
+    fi
     echo "⏳  Transcribing..."
 
     for i in $(seq 1 60); do
         sleep 0.5
+        if [ -f "$ERROR_FILE" ]; then
+            echo "❌  $(cat "$ERROR_FILE")"
+            rm -f "$ERROR_FILE"
+            exit 1
+        fi
         if [ -f "$TRANSCRIPT_FILE" ]; then
             # PyObjC sets clipboard as NSString so VS Code's Electron webview
             # gets correct Unicode (Å Ä Ö). pbcopy raw bytes fail in Electron.
@@ -50,10 +71,21 @@ PYEOF
         fi
     done
     echo "❌  Timed out waiting for transcript."
+    echo "   Check: cat ~/.productivity-tools/whisper-vscode/whisper_daemon.log"
+    echo "          cat ~/.productivity-tools/whisper-vscode/whisper_daemon.err"
 
 else
     # ── Start phase ─────────────────────────────────────────────────────────
     rm -f "$TRANSCRIPT_FILE"
-    echo "{\"action\":\"toggle\",\"lang\":\"$WHISPER_LANG\"}" | nc -U "$SOCKET" > /dev/null
-    echo "🎙  Recording [$WHISPER_LANG]... press Ctrl+Shift+E again to stop."
+    rm -f "$ERROR_FILE"
+    RESPONSE=$(printf '{"action":"toggle","lang":"%s"}\n' "$WHISPER_LANG" | nc -U "$SOCKET")
+    if echo "$RESPONSE" | grep -q '"recording_started"'; then
+        echo "🎙  Recording [$WHISPER_LANG] in background."
+        echo "   This task exits now; press the shortcut again to stop and transcribe."
+    elif echo "$RESPONSE" | grep -q '"busy"'; then
+        echo "⏳  Whisper is already transcribing. Wait a few seconds and try again."
+    else
+        echo "❌ Could not start recording. Daemon response: $RESPONSE"
+        exit 1
+    fi
 fi

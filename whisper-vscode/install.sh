@@ -63,12 +63,42 @@ ok "Python packages installed"
 
 # ── 7. Copy scripts ───────────────────────────────────────────────────────────
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/run"
+chmod 700 "$INSTALL_DIR/run"
 cp "$SCRIPT_DIR/whisper_daemon.py"  "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/whisper_trigger.sh" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/whisper_trigger.sh"
 ok "Scripts copied to $INSTALL_DIR"
 
-# ── 8. LaunchAgent ────────────────────────────────────────────────────────────
+# ── 8. OpenAI API key ─────────────────────────────────────────────────────────
+API_KEY_CONFIGURED=false
+if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "sk-your-key-here" ]]; then
+  API_KEY_CONFIGURED=true
+elif grep -Eq 'OPENAI_API_KEY=["'\'']?sk-' "$HOME/.zshrc" 2>/dev/null \
+  && ! grep -Eq 'OPENAI_API_KEY=["'\'']?sk-your-key-here' "$HOME/.zshrc" 2>/dev/null; then
+  API_KEY_CONFIGURED=true
+fi
+
+if [[ "$API_KEY_CONFIGURED" != true ]]; then
+  fail "OPENAI_API_KEY not found in environment or ~/.zshrc.
+Get a key at: https://platform.openai.com/api-keys
+Then add to ~/.zshrc:
+  export OPENAI_API_KEY=\"sk-your-key-here\"
+Run: source ~/.zshrc
+Then re-run install.sh"
+fi
+ok "OpenAI API key configured"
+
+# ── 9. Remove legacy install leftovers ────────────────────────────────────────
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.jakob.whisper-daemon.plist"
+if [[ -f "$LEGACY_PLIST" ]]; then
+  launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+  rm -f "$LEGACY_PLIST"
+  ok "Removed legacy LaunchAgent com.jakob.whisper-daemon"
+fi
+rm -f /tmp/whisper_daemon.sock /tmp/whisper_latest_transcript.txt
+
+# ── 10. LaunchAgent ───────────────────────────────────────────────────────────
 PLIST_DEST="$HOME/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist"
 sed \
   -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
@@ -80,14 +110,21 @@ launchctl unload "$PLIST_DEST" 2>/dev/null || true
 launchctl load   "$PLIST_DEST"
 ok "LaunchAgent installed → $PLIST_DEST"
 
-sleep 3
-if cat /tmp/whisper_daemon.log 2>/dev/null | grep -q "Listening on"; then
-  ok "Daemon started successfully"
-else
-  info "Daemon may still be starting. Check: cat /tmp/whisper_daemon.log"
+for _ in $(seq 1 15); do
+  if cat "$INSTALL_DIR/whisper_daemon.log" 2>/dev/null | grep -q "Listening on"; then
+    ok "Daemon started successfully"
+    break
+  fi
+  sleep 1
+done
+
+if ! cat "$INSTALL_DIR/whisper_daemon.log" 2>/dev/null | grep -q "Listening on"; then
+  info "Daemon did not report ready within 15 seconds."
+  info "Check: cat $INSTALL_DIR/whisper_daemon.log"
+  info "And:   cat $INSTALL_DIR/whisper_daemon.err"
 fi
 
-# ── 9. VS Code tasks.json ─────────────────────────────────────────────────────
+# ── 11. VS Code tasks.json ────────────────────────────────────────────────────
 TASKS_FILE="$HOME/Library/Application Support/Code/User/tasks.json"
 TRIGGER_PATH="$INSTALL_DIR/whisper_trigger.sh"
 info "Updating VS Code tasks.json..."
@@ -126,7 +163,7 @@ tasks_file.write_text(json.dumps(content, indent=4) + "\n")
 PYEOF
 ok "VS Code tasks.json updated"
 
-# ── 10. VS Code keybindings.json ──────────────────────────────────────────────
+# ── 12. VS Code keybindings.json ──────────────────────────────────────────────
 KB_FILE="$HOME/Library/Application Support/Code/User/keybindings.json"
 info "Updating VS Code keybindings.json..."
 "$PYTHON_PATH" - "$KB_FILE" <<'PYEOF'
@@ -170,7 +207,7 @@ except FileNotFoundError:
 PYEOF
 ok "VS Code keybindings.json updated"
 
-# ── Manual steps ──────────────────────────────────────────────────────────────
+# ── 13. Manual steps ──────────────────────────────────────────────────────────
 echo ""
 hr
 echo -e "${BOLD}  AUTOMATED SETUP COMPLETE — MANUAL STEP(S) BELOW${NC}"
@@ -179,32 +216,22 @@ echo ""
 
 STEP=1
 
-# API key — only shown if not already set
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo -e "${BOLD}STEP $STEP — OpenAI API key${NC}"
-  hr
-  cat <<EOF
-Add to ~/.zshrc:
-  export OPENAI_API_KEY="sk-your-key-here"
-
-Get a key at: https://platform.openai.com/api-keys
-
-After adding:
-  source ~/.zshrc
-  launchctl unload ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
-  launchctl load   ~/Library/LaunchAgents/com.productivity-tools.whisper-daemon.plist
-  sleep 3
+echo -e "${BOLD}STEP $STEP — Privacy and cost${NC}"
+hr
+cat <<EOF
+Before using this tool, confirm you are comfortable with:
+  - Microphone audio is sent to the OpenAI Audio Transcriptions API.
+  - API usage may cost money on your OpenAI account.
+  - Temporary audio files are deleted after transcription by default.
+  - To keep WAV recordings for debugging, set WHISPER_SAVE_RECORDINGS=1.
+  - Transcribed text is put on the clipboard and pasted into the focused app.
 
 Verification:
-  cat /tmp/whisper_daemon.log | tail -3
-Expected output contains: "Ready. Input device:" and "Listening on /tmp/whisper_daemon.sock"
+  cat "$INSTALL_DIR/whisper_daemon.log" | tail -3
+Expected output contains: "Ready. Input device:" and "Listening on $INSTALL_DIR/run/whisper_daemon.sock"
 EOF
-  echo ""
-  STEP=$((STEP + 1))
-else
-  ok "OpenAI API key already set — skipping Step 1"
-  echo ""
-fi
+echo ""
+STEP=$((STEP + 1))
 
 # Accessibility
 echo -e "${BOLD}STEP $STEP — macOS Accessibility permission${NC}"
@@ -229,7 +256,8 @@ cat <<EOF
 2. Click somewhere in a text editor or chat input
 3. Press Ctrl+Shift+E
    Expected: terminal panel opens showing:
-     🎙  Recording [en]... press Ctrl+Shift+E again to stop.
+     🎙  Recording [en] in background.
+     This task exits now; press the shortcut again to stop and transcribe.
 4. Say a sentence out loud (in English)
 5. Press Ctrl+Shift+E again
    Expected: terminal shows:
@@ -247,8 +275,8 @@ If the shortcut does nothing in VS Code:
   → If tasks are missing, re-run install.sh
 
 Full log for debugging:
-  cat /tmp/whisper_daemon.log
-  cat /tmp/whisper_daemon.err
+  cat "$INSTALL_DIR/whisper_daemon.log"
+  cat "$INSTALL_DIR/whisper_daemon.err"
 EOF
 echo ""
 hr

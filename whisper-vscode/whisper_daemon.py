@@ -23,11 +23,16 @@ from openai import OpenAI
 SAMPLE_RATE     = 16000
 MP3_BITRATE     = "64k"
 CHUNK_MINUTES   = 20
-RECORDINGS_DIR  = Path.home() / "recordings"
-SOCKET_PATH     = "/tmp/whisper_daemon.sock"
+MIN_AUDIO_SECONDS = 0.75
+APP_DIR         = Path.home() / ".productivity-tools" / "whisper-vscode"
+RUNTIME_DIR     = APP_DIR / "run"
+RECORDINGS_DIR  = Path(os.environ.get("WHISPER_RECORDINGS_DIR", Path.home() / "recordings"))
+SAVE_RECORDINGS = os.environ.get("WHISPER_SAVE_RECORDINGS", "0") == "1"
+SOCKET_PATH     = RUNTIME_DIR / "whisper_daemon.sock"
 LANGUAGE_LABELS = {"sv": "Swedish", "en": "English"}
 PREFERRED_INPUT_DEVICES = ["MacBook Pro"]
-TRANSCRIPT_FILE = "/tmp/whisper_latest_transcript.txt"
+TRANSCRIPT_FILE = RUNTIME_DIR / "whisper_latest_transcript.txt"
+ERROR_FILE      = RUNTIME_DIR / "whisper_latest_error.txt"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -38,12 +43,12 @@ def log(msg):
 
 def load_api_key():
     key = os.environ.get("OPENAI_API_KEY")
-    if key:
+    if key and key != "sk-your-key-here":
         return key
     zshrc = Path.home() / ".zshrc"
     if zshrc.exists():
         m = re.search(r'OPENAI_API_KEY=["\']?([^\s"\']+)', zshrc.read_text())
-        if m:
+        if m and m.group(1) != "sk-your-key-here":
             return m.group(1)
     return None
 
@@ -59,7 +64,8 @@ def find_input_device():
 
 def notify(title, message):
     subprocess.run(
-        ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
+        ["osascript", "-e",
+         f"display notification {json.dumps(str(message))} with title {json.dumps(str(title))}"],
         capture_output=True,
     )
 
@@ -126,6 +132,8 @@ class WhisperDaemon:
     # ── Public API ────────────────────────────────────────────────────────────
 
     def toggle(self, lang: str) -> str:
+        if lang not in LANGUAGE_LABELS:
+            lang = "sv"
         with self.lock:
             if self.status == "idle":
                 self.lang = lang
@@ -153,6 +161,8 @@ class WhisperDaemon:
             if self.device is not None else "default mic"
         )
         try:
+            RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            ERROR_FILE.unlink(missing_ok=True)
             log(f"Recording [{label}] via {device_name}")
             notify("Whisper", f"🎙 Recording [{label}] — press shortcut again to stop")
 
@@ -180,32 +190,42 @@ class WhisperDaemon:
             if not self.frames:
                 log("No audio captured — recording too short, skipping.")
                 notify("Whisper", "Recording too short — nothing to transcribe.")
+                TRANSCRIPT_FILE.write_text("", encoding="utf-8")
                 return
 
             audio = np.concatenate(self.frames).flatten()
             duration = len(audio) / SAMPLE_RATE
+            if duration < MIN_AUDIO_SECONDS:
+                log(f"Recording too short ({duration:.2f}s), skipping transcription.")
+                notify("Whisper", "Recording too short — nothing to transcribe.")
+                TRANSCRIPT_FILE.write_text("", encoding="utf-8")
+                return
+
             log(f"Stopped ({duration:.1f}s). Transcribing…")
 
             with self.lock:
                 self.status = "transcribing"
             notify("Whisper", "⏳ Transcribing…")
 
-            RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            wav_path = RECORDINGS_DIR / f"{ts}.wav"
+            wav_path = (RECORDINGS_DIR if SAVE_RECORDINGS else RUNTIME_DIR) / f"{ts}.wav"
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
             save_wav(audio, wav_path)
 
             client = OpenAI()
             text = self._transcribe_audio(audio, wav_path, client)
-            log(f"Transcript: {text[:100]}{'…' if len(text) > 100 else ''}")
+            log(f"Transcript received ({len(text)} characters)")
             # Write transcript for trigger script to pick up and paste
             # (paste happens in VS Code terminal context which has accessibility)
-            Path(TRANSCRIPT_FILE).write_text(text, encoding="utf-8")
+            TRANSCRIPT_FILE.write_text(text, encoding="utf-8")
 
         except Exception as e:
             log(f"Error in recording/transcription: {e}")
             notify("Whisper ❌", str(e)[:120])
+            ERROR_FILE.write_text(str(e), encoding="utf-8")
         finally:
+            if "wav_path" in locals() and not SAVE_RECORDINGS:
+                wav_path.unlink(missing_ok=True)
             with self.lock:
                 self.status = "idle"
 
@@ -233,12 +253,14 @@ class WhisperDaemon:
     # ── Socket server ─────────────────────────────────────────────────────────
 
     def run(self):
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        RUNTIME_DIR.chmod(0o700)
         sock_path = Path(SOCKET_PATH)
         if sock_path.exists():
             sock_path.unlink()
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(SOCKET_PATH)
+        server.bind(str(SOCKET_PATH))
         server.listen(5)
         log(f"Listening on {SOCKET_PATH}")
 
